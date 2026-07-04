@@ -3,38 +3,71 @@ from streamlit_webrtc import webrtc_streamer
 import av
 import cv2
 import joblib
-import numpy as np
-import os
+import mediapipe as mp
+import time
 
 st.title("Sign Language Recognition")
-st.write("Webcam Live Demo")
+st.write("Live Sign Language Word Prediction")
 
-MODEL_PATH = "model/sign_language_landmark_model.pkl"
-LABELS_PATH = "model/labels.txt"
+model = joblib.load("model/sign_language_landmark_model.pkl")
 
-@st.cache_resource
-def load_model():
-    with open(MODEL_PATH, "rb") as f:
-        model = joblib.load(MODEL_PATH)
+mp_hands = mp.solutions.hands
+mp_draw = mp.solutions.drawing_utils
 
-    with open(LABELS_PATH, "r") as f:
-        labels = [line.strip() for line in f.readlines()]
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
 
-    return model, labels
-
-model, labels = load_model()
-
-st.success("Model loaded successfully!")
+word = ""
+last_letter = ""
+last_time = time.time()
 
 def video_frame_callback(frame):
-    img = frame.to_ndarray(format="bgr24")
+    global word, last_letter, last_time
 
-    cv2.putText(img, "Camera Working", (30, 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    img = frame.to_ndarray(format="bgr24")
+    img = cv2.flip(img, 1)
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    result = hands.process(rgb)
+
+    current_letter = ""
+
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks:
+            landmarks = []
+
+            for point in hand_landmarks.landmark:
+                landmarks.append(point.x)
+                landmarks.append(point.y)
+
+            if len(landmarks) == 42:
+                current_letter = str(model.predict([landmarks])[0])
+
+            mp_draw.draw_landmarks(
+                img,
+                hand_landmarks,
+                mp_hands.HAND_CONNECTIONS
+            )
+
+            now = time.time()
+            if current_letter and current_letter != last_letter and now - last_time > 1.5:
+                word += current_letter
+                last_letter = current_letter
+                last_time = now
+
+    cv2.putText(img, "Letter: " + current_letter, (30, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+
+    cv2.putText(img, "Word: " + word, (30, 100),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 0, 0), 3)
 
     return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 webrtc_streamer(
-    key="sign-language-camera",
+    key="sign-language-live-word",
     video_frame_callback=video_frame_callback
 )
